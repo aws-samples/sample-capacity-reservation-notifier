@@ -1,6 +1,6 @@
 # Capacity Reservation Notifier
 
-本项目基于 AWS Serverless 架构，实现跨区域 Capacity Blocks 到期提前预警、未开机 CB 闲置监控，助力客户避免业务中断与成本浪费。
+本项目基于AWS Serverless架构，实现跨区域Capacity Blocks到期提前预警、未开机 CB 闲置监控，助力客户避免业务中断与成本浪费。
 
 ## 解决方案与核心功能
 
