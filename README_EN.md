@@ -93,6 +93,10 @@ aws lambda invoke \
 
 Estimated monthly cost: ~$0.03 (almost entirely within the AWS Free Tier)
 
+## Security
+
+See [CONTRIBUTING](CONTRIBUTING.md) for contribution guidelines.
+
 ## License
 
-MIT-0
+This library is licensed under the MIT-0 License. See the [LICENSE](LICENSE) file.
