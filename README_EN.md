@@ -1,3 +1,5 @@
+English | [中文](README.md)
+
 # Capacity Reservation Notifier
 
 A serverless solution on AWS that provides proactive expiration alerts for Capacity Blocks across regions and monitors idle CB resources to help customers avoid service disruptions and cost waste.

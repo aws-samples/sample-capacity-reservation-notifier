@@ -1,3 +1,5 @@
+[English](README_EN.md) | 中文
+
 # Capacity Reservation Notifier
 
 本项目基于AWS Serverless架构，实现跨区域Capacity Blocks到期提前预警、未开机 CB 闲置监控，助力客户避免业务中断与成本浪费。
