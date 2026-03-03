@@ -121,6 +121,8 @@ aws lambda invoke \
   response.json
 ```
 
+function-name后需要输输入'CDK生成的function name'，也可在lambda页面进行名称查询。
+
 ## 成本
 
 预计月度成本约 $0.03（几乎全部在 AWS 免费套餐内）
