@@ -3,25 +3,45 @@ import os
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict
 
+# Import shared EC2 service functions
+from common.ec2_service import (
+    get_all_regions,
+    get_capacity_reservations,
+    get_running_instances_for_reservations
+)
+from common.mock_data import (
+    get_mock_regions,
+    generate_mock_reservations,
+    get_mock_running_instances_for_reservations
+)
+
 def lambda_handler(event, context):
     """扫描所有 regions 的 active Capacity Reservations 并发送邮件通知"""
     try:
         sns_topic_arn = os.environ['SNS_TOPIC_ARN']
-        
-        # 获取所有 regions
-        regions = get_all_regions()
-        print(f"扫描 {len(regions)} 个 regions")
-        
-        # 扫描所有 regions 的 Capacity Reservations
-        all_reservations = []
-        for region in regions:
-            reservations = get_capacity_reservations(region)
-            all_reservations.extend(reservations)
-        
-        print(f"找到 {len(all_reservations)} 个 active Capacity Reservations")
 
-        # 查询每个 CB 匹配的已开机 EC2
-        cb_instances = get_running_instances_for_reservations(all_reservations)
+        # Check if mock mode is enabled
+        use_mock_data = os.environ.get('ENABLE_MOCK_DATA', 'false').lower() == 'true'
+
+        if use_mock_data:
+            print("🎭 Mock模式已启用 - 使用模拟数据生成邮件报告")
+            all_reservations = generate_mock_reservations()
+            cb_instances = get_mock_running_instances_for_reservations(all_reservations)
+        else:
+            # 获取所有 regions
+            regions = get_all_regions()
+            print(f"扫描 {len(regions)} 个 regions")
+
+            # 扫描所有 regions 的 Capacity Reservations
+            all_reservations = []
+            for region in regions:
+                reservations = get_capacity_reservations(region)
+                all_reservations.extend(reservations)
+
+            print(f"找到 {len(all_reservations)} 个 active Capacity Reservations")
+
+            # 查询每个 CB 匹配的已开机 EC2
+            cb_instances = get_running_instances_for_reservations(all_reservations)
 
         # 生成邮件内容
         subject, body = generate_email(all_reservations, cb_instances)
@@ -56,43 +76,6 @@ Error: {str(e)}
             pass
         raise
 
-def get_all_regions() -> List[str]:
-    """获取所有可用的 AWS regions"""
-    ec2 = boto3.client('ec2')
-    response = ec2.describe_regions()
-    return [region['RegionName'] for region in response['Regions']]
-
-def get_capacity_reservations(region: str) -> List[Dict]:
-    """获取指定 region 的 active Capacity Reservations（处理分页）"""
-    ec2 = boto3.client('ec2', region_name=region)
-    
-    try:
-        reservations = []
-        next_token = None
-        
-        while True:
-            params = {
-                'MaxResults': 100
-            }
-            
-            if next_token:
-                params['NextToken'] = next_token
-            
-            response = ec2.describe_capacity_reservations(**params)
-            
-            for reservation in response['CapacityReservations']:
-                reservation['Region'] = region
-                reservations.append(reservation)
-            
-            next_token = response.get('NextToken')
-            if not next_token:
-                break
-        
-        return reservations
-    
-    except Exception as e:
-        print(f"扫描 region {region} 时出错: {str(e)}")
-        return []
 
 def generate_email(reservations: List[Dict], cb_instances: Dict[str, List[Dict]] = None) -> tuple:
     """生成邮件主题和纯文本内容"""
@@ -260,36 +243,6 @@ No active Capacity Reservations found.
     body = '\n'.join(lines)
     return subject, body
 
-def get_running_instances_for_reservations(reservations: List[Dict]) -> Dict[str, List[Dict]]:
-    """查询每个 CB 关联的已开机 EC2 实例"""
-    # 按 region 分组 reservation id
-    by_region: Dict[str, List[str]] = {}
-    for res in reservations:
-        region = res['Region']
-        by_region.setdefault(region, []).append(res['CapacityReservationId'])
-
-    result: Dict[str, List[Dict]] = {}
-    for region, cr_ids in by_region.items():
-        ec2 = boto3.client('ec2', region_name=region)
-        try:
-            paginator = ec2.get_paginator('describe_instances')
-            for page in paginator.paginate(
-                Filters=[
-                    {'Name': 'capacity-reservation-id', 'Values': cr_ids},
-                    {'Name': 'instance-state-name', 'Values': ['running']},
-                ]
-            ):
-                for reservation in page['Reservations']:
-                    for inst in reservation['Instances']:
-                        cr_id = inst.get('CapacityReservationId') or \
-                                inst.get('CapacityReservationSpecification', {}) \
-                                    .get('CapacityReservationTarget', {}) \
-                                    .get('CapacityReservationId')
-                        if cr_id:
-                            result.setdefault(cr_id, []).append(inst)
-        except Exception as e:
-            print(f"查询 region {region} EC2 实例时出错: {str(e)}")
-    return result
 
 def send_email(topic_arn: str, subject: str, body: str):
     """通过 SNS 发送邮件"""
