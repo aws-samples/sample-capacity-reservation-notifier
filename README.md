@@ -298,6 +298,16 @@ capacity_reservation_notifier/
 └── app.py                              # CDK应用入口
 ```
 
+## Roadmap
+
+### 计划中的功能
+
+- **基于 EC2 的健康状态告警**
+  - 实例状态检查（Instance Status Check）监控与告警
+  - 系统状态检查（System Status Check）监控与告警
+  - 异常状态实时邮件通知
+
+
 ## 许可证
 
 MIT-0, 请看 LICENSE 文件。
