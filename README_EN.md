@@ -36,6 +36,9 @@ Key pain points this solution addresses:
 - All logs stored in CloudWatch Logs
 
 ### Real-time Dashboard
+
+![preview.png](resources/preview2.png)
+
 - View all Capacity Reservations across regions in real-time
 - Color-coded status: 🔴 Red (not fully launched), 🟡 Yellow (expiring soon), 🔵 Blue (starting soon), 🟢 Green (normal)
 - Click on CB to view associated EC2 instances

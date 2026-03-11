@@ -54,6 +54,9 @@ AWS Capacity Blocks（CB）为客户提供专属算力预订能力，但原生�
 - 所有日志记录到 CloudWatch Logs
 
 ### 实时Dashboard
+
+![preview.png](resources/preview2.png)
+
 - 实时查看所有region的Capacity Reservations
 - 颜色标识：🔴红色（未完全启动）、🟡黄色（即将到期）、🔵蓝色（即将开始）、🟢绿色（正常）
 - 点击CB查看关联的EC2实例列表
