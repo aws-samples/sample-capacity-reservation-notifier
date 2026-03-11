@@ -14,6 +14,10 @@ interface StatusBadgeProps {
 }
 
 const statusConfig: Record<ReservationStatus, { color: string; text: string }> = {
+  expired: {
+    color: '#4b5563',
+    text: '已过期'
+  },
   not_fully_launched: {
     color: '#ef4444',
     text: '未完全启动'

@@ -76,18 +76,25 @@ export const Dashboard: React.FC = () => {
         {summary && (
           <Card style={{ marginBottom: 24 }}>
             <Row gutter={16}>
-              <Col span={6}>
+              <Col span={5}>
                 <Statistic
                   title="总计 Regions"
                   value={summary.totalRegions}
                   prefix={<CloudOutlined />}
                 />
               </Col>
-              <Col span={6}>
+              <Col span={5}>
                 <Statistic
                   title="总计预留"
                   value={summary.totalReservations}
                   prefix={<DatabaseOutlined />}
+                />
+              </Col>
+              <Col span={3}>
+                <Statistic
+                  title="已过期"
+                  value={summary.byStatus.expired}
+                  valueStyle={{ color: '#4b5563' }}
                 />
               </Col>
               <Col span={3}>
@@ -97,21 +104,21 @@ export const Dashboard: React.FC = () => {
                   valueStyle={{ color: '#ef4444' }}
                 />
               </Col>
-              <Col span={3}>
+              <Col span={2}>
                 <Statistic
                   title="即将到期"
                   value={summary.byStatus.expiring_soon}
                   valueStyle={{ color: '#facc15' }}
                 />
               </Col>
-              <Col span={3}>
+              <Col span={2}>
                 <Statistic
                   title="即将开始"
                   value={summary.byStatus.starting_soon}
                   valueStyle={{ color: '#3b82f6' }}
                 />
               </Col>
-              <Col span={3}>
+              <Col span={2}>
                 <Statistic
                   title="正常"
                   value={summary.byStatus.normal}

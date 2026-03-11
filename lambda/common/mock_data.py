@@ -158,6 +158,28 @@ def generate_mock_reservations() -> List[Dict]:
             'OwnerId': '123456789012',
             'CapacityReservationArn': 'arn:aws:ec2:ap-northeast-1:123456789012:capacity-reservation/cr-mock-5678901234abcdef5'
         },
+        {
+            'CapacityReservationId': 'cr-mock-6789012345abcdef6',
+            'Region': 'ap-northeast-1',
+            'State': 'expired',
+            'InstanceType': 'p4d.24xlarge',
+            'AvailabilityZone': 'ap-northeast-1b',
+            'TotalInstanceCount': 4,
+            'AvailableInstanceCount': 4,
+            'StartDate': now - timedelta(days=10),
+            'EndDate': now - timedelta(hours=5),  # Expired 5 hours ago (BLACK/DARK GRAY)
+            'Tags': [
+                {'Key': 'Name', 'Value': 'Expired Test Reservation'},
+                {'Key': 'Environment', 'Value': 'Testing'},
+                {'Key': 'Status', 'Value': 'Cleanup Required'}
+            ],
+            'InstanceMatchCriteria': 'targeted',
+            'CreateDate': now - timedelta(days=20),
+            'EphemeralStorage': False,
+            'InstancePlatform': 'Linux/UNIX',
+            'OwnerId': '123456789012',
+            'CapacityReservationArn': 'arn:aws:ec2:ap-northeast-1:123456789012:capacity-reservation/cr-mock-6789012345abcdef6'
+        },
     ]
 
     return mock_data
@@ -182,6 +204,7 @@ def generate_mock_instances(reservation_id: str, region: str) -> List[Dict]:
         'cr-mock-3456789012abcdef3': 0,  # Not started yet
         'cr-mock-4567890123abcdef4': 7,  # 12 total - 5 available = 7 running
         'cr-mock-5678901234abcdef5': 6,  # 6 total - 0 available = 6 running
+        'cr-mock-6789012345abcdef6': 0,  # Expired - no instances
     }
 
     num_instances = instance_counts.get(reservation_id, 0)

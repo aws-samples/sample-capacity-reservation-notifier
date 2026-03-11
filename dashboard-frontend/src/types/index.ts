@@ -1,6 +1,6 @@
 // TypeScript type definitions for Capacity Reservation Dashboard
 
-export type ReservationStatus = 'not_fully_launched' | 'expiring_soon' | 'starting_soon' | 'normal';
+export type ReservationStatus = 'expired' | 'not_fully_launched' | 'expiring_soon' | 'starting_soon' | 'normal';
 
 export interface Tag {
   key: string;
@@ -32,6 +32,7 @@ export interface CapacityReservation {
 
 export interface RegionSummary {
   total: number;
+  expired: number;
   not_fully_launched: number;
   expiring_soon: number;
   starting_soon: number;
@@ -48,6 +49,7 @@ export interface GlobalSummary {
   totalRegions: number;
   totalReservations: number;
   byStatus: {
+    expired: number;
     not_fully_launched: number;
     expiring_soon: number;
     starting_soon: number;

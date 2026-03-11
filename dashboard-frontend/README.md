@@ -91,6 +91,8 @@ cd ..
 
 **参考**: [AWS Amplify Manual Deploys](https://docs.aws.amazon.com/amplify/latest/userguide/manual-deploys.html)
 
+9. 强烈建议开启 Hosting --> Access Control，设置访问用户名密码
+
 ## 目录结构
 
 ```

@@ -43,32 +43,46 @@ export const RegionCard: React.FC<RegionCardProps> = ({ regionData }) => {
         }
       >
         <Row gutter={16} style={{ marginBottom: 16 }}>
-          <Col span={6}>
+          <Col span={4}>
             <Statistic
               title="总计"
               value={summary.total}
               prefix={<DatabaseOutlined />}
             />
           </Col>
-          <Col span={6}>
+          <Col span={4}>
+            <Statistic
+              title="已过期"
+              value={summary.expired}
+              valueStyle={{ color: '#4b5563' }}
+            />
+          </Col>
+          <Col span={4}>
             <Statistic
               title="未完全启动"
               value={summary.not_fully_launched}
               valueStyle={{ color: '#ef4444' }}
             />
           </Col>
-          <Col span={6}>
+          <Col span={4}>
             <Statistic
               title="即将到期"
               value={summary.expiring_soon}
               valueStyle={{ color: '#facc15' }}
             />
           </Col>
-          <Col span={6}>
+          <Col span={4}>
             <Statistic
               title="即将开始"
               value={summary.starting_soon}
               valueStyle={{ color: '#3b82f6' }}
+            />
+          </Col>
+          <Col span={4}>
+            <Statistic
+              title="正常"
+              value={summary.normal}
+              valueStyle={{ color: '#22c55e' }}
             />
           </Col>
         </Row>

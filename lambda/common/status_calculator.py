@@ -14,17 +14,18 @@ def calculate_status(reservation: Dict, now: Optional[datetime] = None) -> str:
     计算 Capacity Reservation 的状态
 
     Priority order (highest to lowest):
-    1. not_fully_launched (红色) - Started but has unused capacity
-    2. expiring_soon (黄色) - Expires within 2 days
-    3. starting_soon (蓝色) - Starts within 24 hours
-    4. normal (绿色) - Everything else
+    1. expired (黑色/深灰色) - EndDate has passed
+    2. not_fully_launched (红色) - Started but has unused capacity
+    3. expiring_soon (黄色) - Expires within 2 days
+    4. starting_soon (蓝色) - Starts within 24 hours
+    5. normal (绿色) - Everything else
 
     Args:
         reservation: Capacity Reservation dict from EC2 API
         now: Current UTC datetime (defaults to datetime.now(timezone.utc))
 
     Returns:
-        Status string: 'not_fully_launched' | 'expiring_soon' | 'starting_soon' | 'normal'
+        Status string: 'expired' | 'not_fully_launched' | 'expiring_soon' | 'starting_soon' | 'normal'
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -34,7 +35,12 @@ def calculate_status(reservation: Dict, now: Optional[datetime] = None) -> str:
     end_date = reservation.get('EndDate')
     available_count = reservation.get('AvailableInstanceCount', 0)
 
-    # Red: Not fully launched (highest priority)
+    # Black/Dark Gray: Expired (highest priority)
+    # EndDate < now
+    if end_date and end_date < now:
+        return 'expired'
+
+    # Red: Not fully launched
     # StartDate <= now AND AvailableInstanceCount > 0
     if start_date and start_date <= now and available_count > 0:
         return 'not_fully_launched'
@@ -66,6 +72,7 @@ def get_status_color(status: str) -> str:
         Hex color code
     """
     color_map = {
+        'expired': '#4b5563',             # Dark Gray
         'not_fully_launched': '#ef4444',  # Red
         'expiring_soon': '#facc15',       # Yellow
         'starting_soon': '#3b82f6',       # Blue
@@ -89,7 +96,19 @@ def calculate_display_message(reservation: Dict, status: str, now: Optional[date
     if now is None:
         now = datetime.now(timezone.utc)
 
-    if status == 'not_fully_launched':
+    if status == 'expired':
+        end_date = reservation.get('EndDate')
+        if end_date:
+            time_passed = now - end_date
+            days = time_passed.days
+            if days > 0:
+                return f"已过期 {days} 天"
+            else:
+                hours = time_passed.seconds // 3600
+                return f"已过期 {hours} 小时"
+        return "已过期"
+
+    elif status == 'not_fully_launched':
         available = reservation.get('AvailableInstanceCount', 0)
         total = reservation.get('TotalInstanceCount', 0)
         return f"未启动: {available}/{total} 实例"

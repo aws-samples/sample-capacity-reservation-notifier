@@ -118,6 +118,7 @@ def get_all_capacity_reservations() -> Dict[str, Any]:
     # Build region data with summaries
     regions_data = []
     total_by_status = {
+        'expired': 0,
         'not_fully_launched': 0,
         'expiring_soon': 0,
         'starting_soon': 0,
@@ -130,6 +131,7 @@ def get_all_capacity_reservations() -> Dict[str, Any]:
         # Calculate region summary
         region_summary = {
             'total': len(reservations),
+            'expired': 0,
             'not_fully_launched': 0,
             'expiring_soon': 0,
             'starting_soon': 0,
