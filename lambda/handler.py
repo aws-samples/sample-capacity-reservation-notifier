@@ -125,10 +125,10 @@ def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[st
         name_tag = next((t['Value'] for t in r.get('Tags', []) if t['Key'] == 'Name'), None)
         return name_tag or r['CapacityReservationId']
 
-    # 即将开机：StartDate 在 (now, now+1h]
+    # 即将开机：StartDate 在 (now, now+2h]
     launch_soon = [r for r in reservations
-                   if r.get('StartDate') and now < r['StartDate'] <= one_hour_later]
-    print(f"[ALERT] 即将开机(1h内): {len(launch_soon)} 个 CB")
+                   if r.get('StartDate') and now < r['StartDate'] <= two_hours_later]
+    print(f"[ALERT] 即将开机(2h内): {len(launch_soon)} 个 CB")
     for r in launch_soon:
         print(f"[ALERT]   LAUNCH: {r.get('CapacityReservationId')} start={r.get('StartDate')}")
 
