@@ -119,7 +119,7 @@ class CapacityReservationNotifierStack(Stack):
         scheduler.CfnSchedule(
             self, "HourlyAlertSchedule",
             name="capacity-reservation-notifier-alert-check",
-            schedule_expression="cron(0 * * * ? *)",
+            schedule_expression="cron(0/30 * * * ? *)",
             flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
                 mode="OFF"
             ),
