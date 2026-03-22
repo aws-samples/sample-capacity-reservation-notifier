@@ -122,7 +122,7 @@ def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[st
         now_cst   = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
         console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#CapacityReservations:"
 
-        subject = f"[ACTION: LAUNCH REQUIRED] {region} | CB {rid} starts at {start_cst}"
+        subject = f"[ACTION: LAUNCH REQUIRED] {region} | {rid} starts at {start_cst[:19]}"
 
         lines = []
         lines.append("*" * W)
@@ -165,7 +165,7 @@ def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[st
         now_cst = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
         console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#CapacityReservations:"
 
-        subject = f"[ACTION: SHUTDOWN REQUIRED] {region} | CB {rid} expires at {end_cst}"
+        subject = f"[ACTION: SHUTDOWN REQUIRED] {region} | {rid} expires at {end_cst[:19]}"
 
         lines = []
         lines.append("*" * W)
