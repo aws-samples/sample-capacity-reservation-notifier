@@ -17,56 +17,80 @@ from common.mock_data import (
 
 def lambda_handler(event, context):
     """扫描所有 regions 的 active Capacity Reservations 并发送邮件通知"""
+    import traceback
+    beijing_tz = timezone(timedelta(hours=8))
+    start_time = datetime.now(timezone.utc)
+    print(f"[START] lambda_handler invoked | event={event} | time={start_time.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')}")
+
     try:
         sns_topic_arn = os.environ['SNS_TOPIC_ARN']
         mode = event.get('mode', 'daily_report') if event else 'daily_report'
+        print(f"[CONFIG] mode={mode} | sns_topic_arn={sns_topic_arn}")
 
         # Check if mock mode is enabled
         use_mock_data = os.environ.get('ENABLE_MOCK_DATA', 'false').lower() == 'true'
+        print(f"[CONFIG] use_mock_data={use_mock_data}")
 
         if use_mock_data:
-            print("Mock模式已启用 - 使用模拟数据生成邮件报告")
+            print("[MOCK] Mock模式已启用 - 使用模拟数据生成邮件报告")
             all_reservations = generate_mock_reservations()
             cb_instances = get_mock_running_instances_for_reservations(all_reservations)
             region_count = len(set(r['Region'] for r in all_reservations))
         else:
             # 获取所有 regions
             regions = get_all_regions()
-            print(f"扫描 {len(regions)} 个 regions")
+            print(f"[SCAN] 扫描 {len(regions)} 个 regions: {regions}")
 
             # 扫描所有 regions 的 Capacity Reservations
             all_reservations = []
             for region in regions:
                 reservations = get_capacity_reservations(region)
+                if reservations:
+                    print(f"[SCAN] {region}: 找到 {len(reservations)} 个 CB")
                 all_reservations.extend(reservations)
 
-            print(f"找到 {len(all_reservations)} 个 active Capacity Reservations")
+            print(f"[SCAN] 汇总: 共找到 {len(all_reservations)} 个 active Capacity Reservations")
+            for r in all_reservations:
+                print(f"[CB] id={r.get('CapacityReservationId')} region={r.get('Region')} state={r.get('State')} "
+                      f"type={r.get('InstanceType')} total={r.get('TotalInstanceCount')} "
+                      f"start={r.get('StartDate')} end={r.get('EndDate')}")
 
             # 查询每个 CB 匹配的已开机 EC2
+            print("[SCAN] 查询各 CB 运行中的 EC2 实例...")
             cb_instances = get_running_instances_for_reservations(all_reservations)
+            for rid, instances in cb_instances.items():
+                if instances:
+                    print(f"[EC2] CB {rid} 有 {len(instances)} 台运行中实例: {[i['InstanceId'] for i in instances]}")
             region_count = len(regions)
 
         if mode == 'alert_check':
-            print("告警检查模式 - 仅发送紧急告警邮件")
+            print("[MODE] 告警检查模式 - 仅发送紧急告警邮件")
             check_and_send_urgent_alerts(all_reservations, cb_instances, sns_topic_arn)
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            print(f"[END] alert_check 完成 | 耗时 {elapsed:.1f}s")
             return {
                 'statusCode': 200,
                 'body': f'告警检查完成，扫描 {len(all_reservations)} 个 reservations'
             }
         else:
+            print("[MODE] 日报模式 - 生成并发送汇总邮件")
             # 生成邮件内容
             subject, body = generate_email(all_reservations, cb_instances)
+            print(f"[EMAIL] 生成邮件完成 | subject={subject} | body_length={len(body)}")
 
             # 发送邮件
             send_email(sns_topic_arn, subject, body)
 
+            elapsed = (datetime.now(timezone.utc) - start_time).total_seconds()
+            print(f"[END] daily_report 完成 | 耗时 {elapsed:.1f}s")
             return {
                 'statusCode': 200,
                 'body': f'成功扫描 {region_count} 个 regions，找到 {len(all_reservations)} 个 active reservations'
             }
 
     except Exception as e:
-        print(f"错误: {str(e)}")
+        print(f"[ERROR] 异常发生: {str(e)}")
+        print("[ERROR] Traceback: " + traceback.format_exc())
         # 发送错误通知
         try:
             beijing_tz = timezone(timedelta(hours=8))
@@ -83,8 +107,8 @@ Error: {str(e)}
 {'=' * 80}
 """
             send_email(os.environ['SNS_TOPIC_ARN'], error_subject, error_body)
-        except:
-            pass
+        except Exception as e2:
+            print(f"[ERROR] 错误通知邮件发送失败: {str(e2)}")
         raise
 
 
@@ -94,6 +118,8 @@ def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[st
     now = datetime.now(timezone.utc)
     one_hour_later = now + timedelta(hours=1)
     two_hours_later = now + timedelta(hours=2)
+    print(f"[ALERT] 检查窗口: now={now.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')} "
+          f"launch_window=1h shutdown_window=2h")
 
     def res_name(r):
         name_tag = next((t['Value'] for t in r.get('Tags', []) if t['Key'] == 'Name'), None)
@@ -102,11 +128,17 @@ def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[st
     # 即将开机：StartDate 在 (now, now+1h]
     launch_soon = [r for r in reservations
                    if r.get('StartDate') and now < r['StartDate'] <= one_hour_later]
+    print(f"[ALERT] 即将开机(1h内): {len(launch_soon)} 个 CB")
+    for r in launch_soon:
+        print(f"[ALERT]   LAUNCH: {r.get('CapacityReservationId')} start={r.get('StartDate')}")
 
     # 即将到期：EndDate 在 (now, now+2h]，且 State=active
     shutdown_soon = [r for r in reservations
                      if r.get('EndDate') and now < r['EndDate'] <= two_hours_later
                      and r.get('State', '').lower() == 'active']
+    print(f"[ALERT] 即将到期(2h内): {len(shutdown_soon)} 个 CB")
+    for r in shutdown_soon:
+        print(f"[ALERT]   SHUTDOWN: {r.get('CapacityReservationId')} end={r.get('EndDate')} state={r.get('State')}")
 
     W = 80
 
@@ -371,11 +403,14 @@ No active Capacity Reservations found.
 
 def send_email(topic_arn: str, subject: str, body: str):
     """通过 SNS 发送邮件"""
+    # SNS Subject 只允许 ASCII 字符且最长 100 字符
+    safe_subject = ''.join(c for c in subject if ord(c) < 128)[:100]
+    print(f"[DEBUG] subject raw={repr(subject)} safe={repr(safe_subject)}")
     sns = boto3.client('sns')
     sns.publish(
         TopicArn=topic_arn,
-        Subject=subject,
+        Subject=safe_subject,
         Message=body,
         MessageStructure='string'
     )
-    print(f"邮件已发送: {subject}")
+    print(f"邮件已发送: {safe_subject}")
