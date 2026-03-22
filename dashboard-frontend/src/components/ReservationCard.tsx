@@ -19,6 +19,7 @@ export const ReservationCard: React.FC<ReservationCardProps> = ({ reservation, o
   const {
     name,
     status,
+    statusTags,
     statusColor,
     displayInfo,
     State,
@@ -42,7 +43,7 @@ export const ReservationCard: React.FC<ReservationCardProps> = ({ reservation, o
       <Space direction="vertical" style={{ width: '100%' }} size="small">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <strong style={{ fontSize: 16 }}>{name}</strong>
-          <StatusBadge status={status} message={displayInfo.message} />
+          <StatusBadge statusTags={statusTags} status={status} message={displayInfo.message} />
         </div>
 
         <Descriptions size="small" column={2}>

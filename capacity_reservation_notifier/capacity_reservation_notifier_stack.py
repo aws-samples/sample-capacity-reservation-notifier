@@ -7,6 +7,8 @@ from aws_cdk import (
     aws_logs as logs,
     aws_scheduler as scheduler,
     aws_apigateway as apigateway,
+    aws_events as events,
+    aws_events_targets as targets,
     CfnOutput,
 )
 from constructs import Construct
@@ -147,7 +149,7 @@ class CapacityReservationNotifierStack(Stack):
             ),
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_origins=["*"],  # TODO: Change to Amplify domain in production
-                allow_methods=["GET", "OPTIONS"],
+                allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
                 allow_headers=["Content-Type", "X-Api-Key"]
             )
         )
@@ -199,6 +201,84 @@ class CapacityReservationNotifierStack(Stack):
             )
         )
 
+        # Grant CloudWatch permissions to API Lambda (for status check alarms)
+        api_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "cloudwatch:PutMetricAlarm",
+                    "cloudwatch:DeleteAlarms",
+                    "cloudwatch:DescribeAlarms"
+                ],
+                resources=["*"]
+            )
+        )
+
+        # Grant SNS permissions for creating regional topics and subscriptions
+        api_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "sns:CreateTopic",
+                    "sns:Subscribe",
+                    "sns:ListTopics",
+                    "sns:ListSubscriptionsByTopic"
+                ],
+                resources=["*"]
+            )
+        )
+
+        # Pass SNS topic ARN to API Lambda for alarm actions
+        api_lambda.add_environment("SNS_TOPIC_ARN", topic.topic_arn)
+        topic.grant_publish(api_lambda)
+
+        # Grant EventBridge permissions to API Lambda (for cross-region alarm forwarding)
+        api_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "events:PutRule",
+                    "events:PutTargets",
+                    "events:DescribeRule",
+                    "iam:PassRole"
+                ],
+                resources=["*"]
+            )
+        )
+
+        # IAM Role for EventBridge cross-region forwarding
+        # (Source regions assume this role to put events on main event bus)
+        eb_forward_role = iam.Role(
+            self, "EventBridgeForwardRole",
+            role_name="capacity-reservation-eventbridge-forward-role",
+            assumed_by=iam.ServicePrincipal("events.amazonaws.com"),
+            description="Allow EventBridge in other regions to forward events to main event bus"
+        )
+        eb_forward_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["events:PutEvents"],
+                resources=[f"arn:aws:events:{self.region}:{self.account}:event-bus/default"]
+            )
+        )
+
+        # EventBridge Rule on main bus: forward alarm events -> SNS
+        main_alarm_rule = events.Rule(
+            self, "MainAlarmToSNSRule",
+            rule_name="capacity-reservation-alarm-to-sns",
+            description="Send capacity-reservation alarm notifications to SNS",
+            event_pattern=events.EventPattern(
+                source=["aws.cloudwatch"],
+                detail_type=["CloudWatch Alarm State Change"],
+                detail={
+                    "alarmName": [{"prefix": "capacity-reservation-status-check-"}],
+                    "state": {"value": ["ALARM"]}
+                }
+            )
+        )
+        main_alarm_rule.add_target(targets.SnsTopic(
+            topic,
+            message=events.RuleTargetInput.from_text(
+                "CloudWatch Alarm triggered: see AWS Console for details"
+            )
+        ))
+
         # Lambda integration
         lambda_integration = apigateway.LambdaIntegration(api_lambda)
 
@@ -220,6 +300,17 @@ class CapacityReservationNotifierStack(Stack):
                 "method.request.querystring.region": True
             }
         )
+
+        # /api/instances/{instanceId}/subscribe-status-check
+        instances_resource_root = api_resource.add_resource("instances")
+        instance_id_resource = instances_resource_root.add_resource("{instanceId}")
+        subscribe_resource = instance_id_resource.add_resource("subscribe-status-check")
+        subscribe_resource.add_method("GET", lambda_integration, api_key_required=True,
+            request_parameters={"method.request.querystring.region": True})
+        subscribe_resource.add_method("POST", lambda_integration, api_key_required=True,
+            request_parameters={"method.request.querystring.region": True})
+        subscribe_resource.add_method("DELETE", lambda_integration, api_key_required=True,
+            request_parameters={"method.request.querystring.region": True})
 
         # Outputs
         CfnOutput(self, "SNSTopicArn", value=topic.topic_arn)

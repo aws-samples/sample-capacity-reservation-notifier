@@ -5,7 +5,7 @@
  */
 
 import axios, { AxiosInstance } from 'axios';
-import type { ReservationsResponse, InstancesResponse } from '../types';
+import type { ReservationsResponse, InstancesResponse, StatusCheckSubscription } from '../types';
 
 class CapacityReservationApi {
   private axios: AxiosInstance;
@@ -67,6 +67,40 @@ class CapacityReservationApi {
       {
         params: { region }
       }
+    );
+    return response.data;
+  }
+
+  /**
+   * Get status check subscription for an EC2 instance
+   */
+  async getStatusCheckSubscription(instanceId: string, region: string): Promise<StatusCheckSubscription> {
+    const response = await this.axios.get(
+      `/api/instances/${instanceId}/subscribe-status-check`,
+      { params: { region } }
+    );
+    return response.data;
+  }
+
+  /**
+   * Subscribe to status check alarms for an EC2 instance
+   */
+  async subscribeStatusCheck(instanceId: string, region: string): Promise<StatusCheckSubscription> {
+    const response = await this.axios.post(
+      `/api/instances/${instanceId}/subscribe-status-check`,
+      {},
+      { params: { region } }
+    );
+    return response.data;
+  }
+
+  /**
+   * Unsubscribe from status check alarms for an EC2 instance
+   */
+  async unsubscribeStatusCheck(instanceId: string, region: string): Promise<StatusCheckSubscription> {
+    const response = await this.axios.delete(
+      `/api/instances/${instanceId}/subscribe-status-check`,
+      { params: { region } }
     );
     return response.data;
   }

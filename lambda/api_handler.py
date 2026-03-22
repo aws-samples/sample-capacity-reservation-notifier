@@ -38,7 +38,7 @@ def format_response(status_code: int, data: dict) -> dict:
         'headers': {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',  # TODO: Change to Amplify domain in production
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, X-Api-Key'
         },
         'body': json.dumps(data, default=str)
@@ -62,7 +62,7 @@ def format_error_response(status_code: int, error_code: str, message: str) -> di
         'headers': {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, OPTIONS',
+            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type, X-Api-Key'
         },
         'body': json.dumps({
@@ -139,9 +139,12 @@ def get_all_capacity_reservations() -> Dict[str, Any]:
         }
 
         for res in reservations:
-            status = res['status']
-            region_summary[status] += 1
-            total_by_status[status] += 1
+            # Use all statuses (a CB can have multiple concurrent statuses)
+            for status in res.get('statuses', [res['status']]):
+                if status in region_summary:
+                    region_summary[status] += 1
+                if status in total_by_status:
+                    total_by_status[status] += 1
 
         regions_data.append({
             'regionName': region_name,
@@ -227,6 +230,170 @@ def get_reservation_instances(reservation_id: str, region: str) -> Dict[str, Any
     }
 
 
+
+
+def ensure_eventbridge_forwarding(ec2_region: str, main_sns_account: str, main_event_bus_arn: str) -> None:
+    """
+    在 EC2 region 建立 EventBridge 规则，将 CloudWatch Alarm 状态变更事件
+    跨 region 转发到主 event bus（us-west-2），由主 bus 触发 SNS。
+    """
+    import boto3
+    eb = boto3.client('events', region_name=ec2_region)
+    rule_name = 'capacity-reservation-forward-alarm-events'
+    target_id = 'ForwardToMainBus'
+
+    # 创建/更新规则：监听 CloudWatch Alarm 状态变更
+    eb.put_rule(
+        Name=rule_name,
+        EventPattern='{"source":["aws.cloudwatch"],"detail-type":["CloudWatch Alarm State Change"],"detail":{"alarmName":[{"prefix":"capacity-reservation-status-check-"}]}}',
+        State='ENABLED',
+        Description='Forward capacity-reservation alarm events to main event bus'
+    )
+    print(f"[ALARM] EventBridge rule created/updated in {ec2_region}")
+
+    # 目标：转发到主 region event bus
+    eb.put_targets(
+        Rule=rule_name,
+        Targets=[{
+            'Id': target_id,
+            'Arn': main_event_bus_arn,
+            'RoleArn': f"arn:aws:iam::{main_sns_account}:role/capacity-reservation-eventbridge-forward-role"
+        }]
+    )
+    print(f"[ALARM] EventBridge target set: {main_event_bus_arn}")
+
+
+def ensure_main_bus_sns_rule(main_region: str, sns_topic_arn: str) -> None:
+    """
+    在主 region event bus 上建立规则：
+    接收跨 region 转发的告警事件 → 触发 SNS。
+    """
+    import boto3
+    eb = boto3.client('events', region_name=main_region)
+    rule_name = 'capacity-reservation-alarm-to-sns'
+
+    eb.put_rule(
+        Name=rule_name,
+        EventPattern='{"source":["aws.cloudwatch"],"detail-type":["CloudWatch Alarm State Change"],"detail":{"alarmName":[{"prefix":"capacity-reservation-status-check-"}],"state":{"value":["ALARM"]}}}',
+        State='ENABLED',
+        Description='Send capacity-reservation alarm notifications to SNS'
+    )
+
+    eb.put_targets(
+        Rule=rule_name,
+        Targets=[{
+            'Id': 'SendToSNS',
+            'Arn': sns_topic_arn,
+            'InputTransformer': {
+                'InputPathsMap': {
+                    'alarmName': '$.detail.alarmName',
+                    'state': '$.detail.state.value',
+                    'reason': '$.detail.state.reason',
+                    'region': '$.region',
+                    'time': '$.time'
+                },
+                'InputTemplate': '"[STATUS CHECK ALARM] Alarm: <alarmName> | State: <state> | Region: <region> | Time: <time> | Reason: <reason>"'
+            }
+        }]
+    )
+    print(f"[ALARM] Main bus SNS rule ensured in {main_region}")
+
+
+def subscribe_status_check(instance_id: str, region: str, sns_topic_arn: str) -> Dict[str, Any]:
+    """为 EC2 实例创建状态检查 CloudWatch Alarm，通过 EventBridge 跨 region 转发到统一 SNS"""
+    import boto3
+    cw = boto3.client('cloudwatch', region_name=region)
+    alarm_prefix = f"capacity-reservation-status-check-{instance_id}"
+
+    # 解析主 region 和 account
+    # sns_topic_arn 格式: arn:aws:sns:{region}:{account}:{name}
+    parts = sns_topic_arn.split(':')
+    main_region = parts[3]
+    main_account = parts[4]
+    main_event_bus_arn = f"arn:aws:events:{main_region}:{main_account}:event-bus/default"
+
+    if region == main_region:
+        # 同 region：直接使用 SNS
+        alarm_action = sns_topic_arn
+        print(f"[ALARM] Same region, using SNS directly: {sns_topic_arn}")
+    else:
+        # 跨 region：CloudWatch Alarm 不配置 SNS Action（让 EventBridge 负责通知）
+        # 确保 EventBridge 转发规则已建立
+        ensure_eventbridge_forwarding(region, main_account, main_event_bus_arn)
+        ensure_main_bus_sns_rule(main_region, sns_topic_arn)
+        alarm_action = None
+        print(f"[ALARM] Cross-region, using EventBridge forwarding: {region} -> {main_region}")
+
+    alarms = [
+        {
+            "AlarmName": f"{alarm_prefix}-system",
+            "AlarmDescription": f"System status check failed for {instance_id} in {region}",
+            "MetricName": "StatusCheckFailed_System",
+            "Dimensions": [{"Name": "InstanceId", "Value": instance_id}],
+        },
+        {
+            "AlarmName": f"{alarm_prefix}-instance",
+            "AlarmDescription": f"Instance status check failed for {instance_id} in {region}",
+            "MetricName": "StatusCheckFailed_Instance",
+            "Dimensions": [{"Name": "InstanceId", "Value": instance_id}],
+        },
+    ]
+
+    created = []
+    for alarm in alarms:
+        kwargs = dict(
+            AlarmName=alarm["AlarmName"],
+            AlarmDescription=alarm["AlarmDescription"],
+            ActionsEnabled=True,
+            MetricName=alarm["MetricName"],
+            Namespace="AWS/EC2",
+            Statistic="Maximum",
+            Dimensions=alarm["Dimensions"],
+            Period=60,
+            EvaluationPeriods=2,
+            Threshold=1,
+            ComparisonOperator="GreaterThanOrEqualToThreshold",
+            TreatMissingData="notBreaching",
+        )
+        if alarm_action:
+            kwargs["AlarmActions"] = [alarm_action]
+        cw.put_metric_alarm(**kwargs)
+        created.append(alarm["AlarmName"])
+        print(f"[ALARM] Created alarm: {alarm['AlarmName']}")
+
+    return {"instanceId": instance_id, "region": region, "alarms": created, "subscribed": True}
+
+def unsubscribe_status_check(instance_id: str, region: str) -> Dict[str, Any]:
+    """删除 EC2 实例的状态检查 CloudWatch Alarm"""
+    import boto3
+    cw = boto3.client('cloudwatch', region_name=region)
+    alarm_prefix = f"capacity-reservation-status-check-{instance_id}"
+    alarm_names = [f"{alarm_prefix}-system", f"{alarm_prefix}-instance"]
+
+    cw.delete_alarms(AlarmNames=alarm_names)
+    print(f"[ALARM] Deleted alarms: {alarm_names}")
+
+    return {"instanceId": instance_id, "region": region, "alarms": alarm_names, "subscribed": False}
+
+
+def get_status_check_subscription(instance_id: str, region: str) -> Dict[str, Any]:
+    """查询 EC2 实例的状态检查订阅状态"""
+    import boto3
+    cw = boto3.client('cloudwatch', region_name=region)
+    alarm_prefix = f"capacity-reservation-status-check-{instance_id}"
+    alarm_names = [f"{alarm_prefix}-system", f"{alarm_prefix}-instance"]
+
+    response = cw.describe_alarms(AlarmNames=alarm_names)
+    existing = [a["AlarmName"] for a in response.get("MetricAlarms", [])]
+
+    subscribed = len(existing) == 2
+    return {
+        "instanceId": instance_id,
+        "region": region,
+        "subscribed": subscribed,
+        "alarms": existing,
+    }
+
 def lambda_handler(event, context):
     """
     Main Lambda handler for API Gateway requests
@@ -252,6 +419,18 @@ def lambda_handler(event, context):
         query_parameters = event.get('queryStringParameters') or {}
 
         # Handle OPTIONS for CORS preflight
+        # 解析 instance_id（用于状态检查订阅路由）
+        # /api/instances/{instanceId}/subscribe-status-check
+        instance_subscribe_path = None
+        if '/api/instances/' in path and path.endswith('/subscribe-status-check'):
+            # 优先从 pathParameters 取（API Gateway 解析更可靠）
+            if path_parameters and path_parameters.get('instanceId'):
+                instance_subscribe_path = path_parameters['instanceId']
+            else:
+                parts = path.split('/')
+                if len(parts) >= 4:
+                    instance_subscribe_path = parts[3]
+
         if http_method == 'OPTIONS':
             return format_response(200, {'message': 'OK'})
 
@@ -284,12 +463,40 @@ def lambda_handler(event, context):
                 data = get_reservation_instances(reservation_id, region)
                 return format_response(200, data)
 
+            elif instance_subscribe_path:
+                # GET /api/instances/{instanceId}/subscribe-status-check
+                qs = event.get('queryStringParameters') or {}
+                region = qs.get('region', '')
+                if not region:
+                    return format_error_response(400, 'MISSING_PARAM', 'region query parameter is required')
+                result = get_status_check_subscription(instance_subscribe_path, region)
+                return format_response(200, result)
+
             else:
                 return format_error_response(
                     404,
                     'NOT_FOUND',
                     f'Path not found: {path}'
                 )
+
+        elif http_method in ('POST', 'DELETE') and instance_subscribe_path:
+            instance_id = instance_subscribe_path
+            qs = event.get('queryStringParameters') or {}
+            region = qs.get('region', '')
+            sns_topic_arn = os.environ.get('SNS_TOPIC_ARN', '')
+
+            if not region:
+                return format_error_response(400, 'MISSING_PARAM', 'region query parameter is required')
+            print(f"[ALARM] {http_method} subscribe-status-check | instance={instance_id} region={region}")
+
+            if http_method == 'POST':
+                if not sns_topic_arn:
+                    return format_error_response(500, 'CONFIG_ERROR', 'SNS_TOPIC_ARN not configured')
+                result = subscribe_status_check(instance_id, region, sns_topic_arn)
+                return format_response(200, result)
+            else:
+                result = unsubscribe_status_check(instance_id, region)
+                return format_response(200, result)
 
         # Method not allowed
         return format_error_response(

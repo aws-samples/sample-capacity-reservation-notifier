@@ -1,48 +1,71 @@
 /**
  * StatusBadge Component
  *
- * Displays a colored badge showing the reservation status
+ * Displays one or multiple colored badges showing reservation status
  */
 
 import React from 'react';
-import { Tag } from 'antd';
+import { Tag, Space } from 'antd';
 import type { ReservationStatus } from '../types';
 
-interface StatusBadgeProps {
+interface StatusTag {
   status: ReservationStatus;
+  color: string;
   message?: string;
 }
 
-const statusConfig: Record<ReservationStatus, { color: string; text: string }> = {
-  expired: {
-    color: '#4b5563',
-    text: '已过期'
-  },
-  not_fully_launched: {
-    color: '#ef4444',
-    text: '未完全启动'
-  },
-  expiring_soon: {
-    color: '#facc15',
-    text: '即将到期'
-  },
-  starting_soon: {
-    color: '#3b82f6',
-    text: '即将开始'
-  },
-  normal: {
-    color: '#22c55e',
-    text: '正常'
-  }
+interface StatusBadgeProps {
+  // Single status (legacy)
+  status?: ReservationStatus;
+  message?: string;
+  // Multiple statuses (new)
+  statusTags?: StatusTag[];
+}
+
+const statusTextMap: Record<ReservationStatus, string> = {
+  expired: '已过期',
+  not_fully_launched: '未完全启动',
+  expiring_soon: '即将到期',
+  starting_soon: '即将开始',
+  normal: '正常'
 };
 
-export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, message }) => {
-  const config = statusConfig[status];
+export const StatusBadge: React.FC<StatusBadgeProps> = ({ status, message, statusTags }) => {
+  // Use statusTags if provided (new multi-status mode)
+  if (statusTags && statusTags.length > 0) {
+    return (
+      <Space size={4} wrap>
+        {statusTags.map((tag, idx) => (
+          <Tag
+            key={idx}
+            color={tag.color}
+            style={{ fontSize: '13px', padding: '2px 10px', margin: 0 }}
+          >
+            {statusTextMap[tag.status] || tag.status}
+            {tag.message && tag.status !== 'normal' && ` - ${tag.message}`}
+          </Tag>
+        ))}
+      </Space>
+    );
+  }
 
-  return (
-    <Tag color={config.color} style={{ fontSize: '14px', padding: '4px 12px' }}>
-      {config.text}
-      {message && ` - ${message}`}
-    </Tag>
-  );
+  // Legacy single status
+  if (status) {
+    const color = {
+      expired: '#4b5563',
+      not_fully_launched: '#ef4444',
+      expiring_soon: '#facc15',
+      starting_soon: '#3b82f6',
+      normal: '#22c55e'
+    }[status] || '#6b7280';
+
+    return (
+      <Tag color={color} style={{ fontSize: '14px', padding: '4px 12px' }}>
+        {statusTextMap[status]}
+        {message && ` - ${message}`}
+      </Tag>
+    );
+  }
+
+  return null;
 };

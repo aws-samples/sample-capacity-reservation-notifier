@@ -2,30 +2,26 @@
 Status Calculator Module
 
 Calculate visual status for Capacity Reservations based on their state, dates, and usage.
-Based on existing alert logic from handler.py:115-138.
+Supports multiple concurrent statuses for a single reservation.
 """
 
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 
-def calculate_status(reservation: Dict, now: Optional[datetime] = None) -> str:
+def calculate_statuses(reservation: Dict, now: Optional[datetime] = None) -> List[str]:
     """
-    计算 Capacity Reservation 的状态
+    计算 Capacity Reservation 的所有适用状态（支持多个并发状态）
 
-    Priority order (highest to lowest):
-    1. expired (黑色/深灰色) - EndDate has passed
-    2. not_fully_launched (红色) - Started but has unused capacity
-    3. expiring_soon (黄色) - Expires within 2 days
-    4. starting_soon (蓝色) - Starts within 24 hours
-    5. normal (绿色) - Everything else
+    Returns list of applicable statuses (may be multiple):
+    - 'expired'            黑色/深灰色 - 已过期
+    - 'not_fully_launched' 红色       - 已开始但未满开机
+    - 'expiring_soon'      黄色       - 2天内到期
+    - 'starting_soon'      蓝色       - 24小时内开始
+    - 'normal'             绿色       - 正常
 
-    Args:
-        reservation: Capacity Reservation dict from EC2 API
-        now: Current UTC datetime (defaults to datetime.now(timezone.utc))
-
-    Returns:
-        Status string: 'expired' | 'not_fully_launched' | 'expiring_soon' | 'starting_soon' | 'normal'
+    Priority: expired is exclusive (if expired, return only expired)
+    All other statuses can coexist.
     """
     if now is None:
         now = datetime.now(timezone.utc)
@@ -35,64 +31,52 @@ def calculate_status(reservation: Dict, now: Optional[datetime] = None) -> str:
     end_date = reservation.get('EndDate')
     available_count = reservation.get('AvailableInstanceCount', 0)
 
-    # Black/Dark Gray: Expired (highest priority)
-    # EndDate < now
+    # Expired is exclusive - highest priority, return immediately
     if end_date and end_date < now:
-        return 'expired'
+        return ['expired']
 
-    # Red: Not fully launched
-    # StartDate <= now AND AvailableInstanceCount > 0
+    statuses = []
+
+    # Not fully launched: started but has unused capacity
     if start_date and start_date <= now and available_count > 0:
-        return 'not_fully_launched'
+        statuses.append('not_fully_launched')
 
-    # Yellow: Expiring soon (2 days)
-    # now < EndDate <= now + 2 days AND State = 'active'
-    if end_date and state == 'active':
-        if now < end_date <= now + timedelta(days=2):
-            return 'expiring_soon'
+    # Expiring soon: within 2 days (applies to both active and scheduled)
+    if end_date and now < end_date <= now + timedelta(days=2):
+        statuses.append('expiring_soon')
 
-    # Blue: Starting soon (24 hours)
-    # now < StartDate <= now + 24 hours
-    if start_date:
-        if now < start_date <= now + timedelta(hours=24):
-            return 'starting_soon'
+    # Starting soon: within 24 hours
+    if start_date and now < start_date <= now + timedelta(hours=24):
+        statuses.append('starting_soon')
 
-    # Green: Normal
-    return 'normal'
+    # Normal if no alerts
+    if not statuses:
+        statuses.append('normal')
+
+    return statuses
+
+
+def calculate_status(reservation: Dict, now: Optional[datetime] = None) -> str:
+    """
+    Legacy single-status API (returns highest priority status).
+    Kept for backward compatibility.
+    """
+    statuses = calculate_statuses(reservation, now)
+    return statuses[0]
 
 
 def get_status_color(status: str) -> str:
-    """
-    Get color code for status
-
-    Args:
-        status: Status string
-
-    Returns:
-        Hex color code
-    """
     color_map = {
-        'expired': '#4b5563',             # Dark Gray
-        'not_fully_launched': '#ef4444',  # Red
-        'expiring_soon': '#facc15',       # Yellow
-        'starting_soon': '#3b82f6',       # Blue
-        'normal': '#22c55e'               # Green
+        'expired': '#4b5563',
+        'not_fully_launched': '#ef4444',
+        'expiring_soon': '#facc15',
+        'starting_soon': '#3b82f6',
+        'normal': '#22c55e'
     }
-    return color_map.get(status, '#6b7280')  # Gray as fallback
+    return color_map.get(status, '#6b7280')
 
 
 def calculate_display_message(reservation: Dict, status: str, now: Optional[datetime] = None) -> str:
-    """
-    Generate human-readable display message for reservation status
-
-    Args:
-        reservation: Capacity Reservation dict
-        status: Status string from calculate_status()
-        now: Current UTC datetime
-
-    Returns:
-        Display message string
-    """
     if now is None:
         now = datetime.now(timezone.utc)
 
@@ -141,37 +125,29 @@ def calculate_display_message(reservation: Dict, status: str, now: Optional[date
 
 
 def enrich_reservation_with_status(reservation: Dict, now: Optional[datetime] = None) -> Dict:
-    """
-    Add status, color, and display info to reservation dict
-
-    Args:
-        reservation: Original Capacity Reservation dict
-        now: Current UTC datetime
-
-    Returns:
-        Enriched reservation dict with additional fields:
-        - status: Status string
-        - statusColor: Hex color code
-        - displayInfo: Dict with message and formatted dates
-    """
     if now is None:
         now = datetime.now(timezone.utc)
 
-    # Calculate status
-    status = calculate_status(reservation, now)
+    # Calculate all applicable statuses
+    statuses = calculate_statuses(reservation, now)
+    primary_status = statuses[0]
 
-    # Get color
-    color = get_status_color(status)
+    # Build status tags list for frontend
+    status_tags = []
+    for s in statuses:
+        status_tags.append({
+            'status': s,
+            'color': get_status_color(s),
+            'message': calculate_display_message(reservation, s, now)
+        })
 
-    # Generate display message
-    message = calculate_display_message(reservation, status, now)
+    # Legacy single status fields (backward compatibility)
+    color = get_status_color(primary_status)
+    message = calculate_display_message(reservation, primary_status, now)
 
     # Format dates to Beijing timezone (UTC+8)
     beijing_tz = timezone(timedelta(hours=8))
-
-    display_info = {
-        'message': message
-    }
+    display_info = {'message': message}
 
     start_date = reservation.get('StartDate')
     if start_date:
@@ -181,17 +157,17 @@ def enrich_reservation_with_status(reservation: Dict, now: Optional[datetime] = 
     if end_date:
         display_info['endDateLocal'] = end_date.astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
 
-    # Get Name tag if exists
     name_tag = None
     for tag in reservation.get('Tags', []):
         if tag.get('Key') == 'Name':
             name_tag = tag.get('Value')
             break
 
-    # Return enriched reservation
     return {
         **reservation,
-        'status': status,
+        'status': primary_status,       # legacy: highest priority
+        'statuses': statuses,           # new: all applicable statuses
+        'statusTags': status_tags,      # new: full tag list with colors/messages
         'statusColor': color,
         'displayInfo': display_info,
         'name': name_tag or reservation.get('CapacityReservationId', 'N/A')

@@ -26,6 +26,8 @@ export interface CapacityReservation {
   EndDate?: string;
   Tags: Tag[];
   status: ReservationStatus;
+  statuses: ReservationStatus[];
+  statusTags: { status: ReservationStatus; color: string; message?: string }[];
   statusColor: string;
   displayInfo: DisplayInfo;
 }
@@ -89,4 +91,11 @@ export interface InstancesResponse {
 export interface ApiError {
   code: string;
   message: string;
+}
+
+export interface StatusCheckSubscription {
+  instanceId: string;
+  region: string;
+  subscribed: boolean;
+  alarms: string[];
 }
