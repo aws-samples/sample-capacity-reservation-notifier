@@ -19,14 +19,16 @@ def lambda_handler(event, context):
     """扫描所有 regions 的 active Capacity Reservations 并发送邮件通知"""
     try:
         sns_topic_arn = os.environ['SNS_TOPIC_ARN']
+        mode = event.get('mode', 'daily_report') if event else 'daily_report'
 
         # Check if mock mode is enabled
         use_mock_data = os.environ.get('ENABLE_MOCK_DATA', 'false').lower() == 'true'
 
         if use_mock_data:
-            print("🎭 Mock模式已启用 - 使用模拟数据生成邮件报告")
+            print("Mock模式已启用 - 使用模拟数据生成邮件报告")
             all_reservations = generate_mock_reservations()
             cb_instances = get_mock_running_instances_for_reservations(all_reservations)
+            region_count = len(set(r['Region'] for r in all_reservations))
         else:
             # 获取所有 regions
             regions = get_all_regions()
@@ -42,18 +44,27 @@ def lambda_handler(event, context):
 
             # 查询每个 CB 匹配的已开机 EC2
             cb_instances = get_running_instances_for_reservations(all_reservations)
+            region_count = len(regions)
 
-        # 生成邮件内容
-        subject, body = generate_email(all_reservations, cb_instances)
-        
-        # 发送邮件
-        send_email(sns_topic_arn, subject, body)
-        
-        return {
-            'statusCode': 200,
-            'body': f'成功扫描 {len(regions)} 个 regions，找到 {len(all_reservations)} 个 active reservations'
-        }
-    
+        if mode == 'alert_check':
+            print("告警检查模式 - 仅发送紧急告警邮件")
+            check_and_send_urgent_alerts(all_reservations, cb_instances, sns_topic_arn)
+            return {
+                'statusCode': 200,
+                'body': f'告警检查完成，扫描 {len(all_reservations)} 个 reservations'
+            }
+        else:
+            # 生成邮件内容
+            subject, body = generate_email(all_reservations, cb_instances)
+
+            # 发送邮件
+            send_email(sns_topic_arn, subject, body)
+
+            return {
+                'statusCode': 200,
+                'body': f'成功扫描 {region_count} 个 regions，找到 {len(all_reservations)} 个 active reservations'
+            }
+
     except Exception as e:
         print(f"错误: {str(e)}")
         # 发送错误通知
@@ -75,6 +86,120 @@ Error: {str(e)}
         except:
             pass
         raise
+
+
+def check_and_send_urgent_alerts(reservations: List[Dict], cb_instances: Dict[str, List[Dict]], sns_topic_arn: str):
+    """检查即将开机/关机的 CB，发送独立告警邮件"""
+    beijing_tz = timezone(timedelta(hours=8))
+    now = datetime.now(timezone.utc)
+    one_hour_later = now + timedelta(hours=1)
+    two_hours_later = now + timedelta(hours=2)
+
+    def res_name(r):
+        name_tag = next((t['Value'] for t in r.get('Tags', []) if t['Key'] == 'Name'), None)
+        return name_tag or r['CapacityReservationId']
+
+    # 即将开机：StartDate 在 (now, now+1h]
+    launch_soon = [r for r in reservations
+                   if r.get('StartDate') and now < r['StartDate'] <= one_hour_later]
+
+    # 即将到期：EndDate 在 (now, now+2h]，且 State=active
+    shutdown_soon = [r for r in reservations
+                     if r.get('EndDate') and now < r['EndDate'] <= two_hours_later
+                     and r.get('State', '').lower() == 'active']
+
+    W = 80
+
+    # 每个即将开机的 CB 发一封独立告警邮件
+    for r in launch_soon:
+        rid       = r.get('CapacityReservationId', 'N/A')
+        name      = res_name(r)
+        region    = r.get('Region', 'N/A')
+        az        = r.get('AvailabilityZone', 'N/A')
+        itype     = r.get('InstanceType', 'N/A')
+        count     = r.get('TotalInstanceCount', 'N/A')
+        start_cst = r['StartDate'].astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
+        now_cst   = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
+        console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#CapacityReservations:"
+
+        subject = f"[ACTION: LAUNCH REQUIRED] {region} | CB {rid} 将于 {start_cst}(北京时间) 开始"
+
+        lines = []
+        lines.append("*" * W)
+        lines.append(f"  [ACTION: LAUNCH REQUIRED] - Region: {region} | CB 即将开始，请立即启动 EC2 实例")
+        lines.append(f"  Console链接: {console_url}")
+        lines.append("*" * W)
+        lines.append("")
+        lines.append(f"  告警时间  : {now_cst} (北京时间)")
+        lines.append(f"  CB 开始时间: {start_cst} (北京时间)")
+        lines.append("")
+        lines.append("-" * W)
+        lines.append(f"  CB ID         : {rid}" + (f"  [{name}]" if name != rid else ""))
+        lines.append(f"  Region        : {region}")
+        lines.append(f"  Avail Zone    : {az}")
+        lines.append(f"  Instance Type : {itype}")
+        lines.append(f"  Instance Count: {count}")
+        lines.append(f"  Start Time    : {start_cst} (北京时间)")
+        running = cb_instances.get(rid, [])
+        if running:
+            lines.append(f"  Running EC2s  : {', '.join(i['InstanceId'] for i in running)}")
+        lines.append("-" * W)
+        lines.append("")
+        lines.append(f"  !! 请在 {start_cst} (北京时间) 前启动 {count} 台 {itype} 实例 !!")
+        lines.append(f"     CB 将于该时间开始，请确保实例已提前在对应 AZ ({az}) 启动。")
+        lines.append("")
+        lines.append("*" * W)
+
+        send_email(sns_topic_arn, subject, '\n'.join(lines))
+        print(f"开机告警已发送: {rid} 开始时间 {start_cst}")
+
+    # 每个即将到期的 CB 发一封独立告警邮件
+    for r in shutdown_soon:
+        rid     = r.get('CapacityReservationId', 'N/A')
+        name    = res_name(r)
+        region  = r.get('Region', 'N/A')
+        az      = r.get('AvailabilityZone', 'N/A')
+        itype   = r.get('InstanceType', 'N/A')
+        count   = r.get('TotalInstanceCount', 'N/A')
+        end_cst = r['EndDate'].astimezone(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
+        now_cst = datetime.now(beijing_tz).strftime('%Y-%m-%d %H:%M:%S CST')
+        console_url = f"https://console.aws.amazon.com/ec2/v2/home?region={region}#CapacityReservations:"
+
+        subject = f"[ACTION: SHUTDOWN REQUIRED] {region} | CB {rid} 将于 {end_cst}(北京时间) 到期"
+
+        lines = []
+        lines.append("*" * W)
+        lines.append(f"  [ACTION: SHUTDOWN REQUIRED] - Region: {region} | CB 即将到期，请立即完成实例迁移/关机")
+        lines.append(f"  Console链接: {console_url}")
+        lines.append("*" * W)
+        lines.append("")
+        lines.append(f"  告警时间  : {now_cst} (北京时间)")
+        lines.append(f"  CB 到期时间: {end_cst} (北京时间)")
+        lines.append("")
+        lines.append("-" * W)
+        lines.append(f"  CB ID         : {rid}" + (f"  [{name}]" if name != rid else ""))
+        lines.append(f"  Region        : {region}")
+        lines.append(f"  Avail Zone    : {az}")
+        lines.append(f"  Instance Type : {itype}")
+        lines.append(f"  Instance Count: {count}")
+        lines.append(f"  End Time      : {end_cst} (北京时间)")
+        running = cb_instances.get(rid, [])
+        if running:
+            lines.append(f"  Running EC2s  : {', '.join(i['InstanceId'] for i in running)}")
+        else:
+            lines.append(f"  Running EC2s  : none")
+        lines.append("-" * W)
+        lines.append("")
+        lines.append(f"  !! 请在 {end_cst} (北京时间) 前完成实例迁移/关机，CB 将于该时间回收 !!")
+        lines.append(f"     到期后 CB 将被释放，请确保运行中的实例已完成迁移或关机。")
+        lines.append("")
+        lines.append("*" * W)
+
+        send_email(sns_topic_arn, subject, '\n'.join(lines))
+        print(f"关机告警已发送: {rid} 到期时间 {end_cst}")
+
+    if not launch_soon and not shutdown_soon:
+        print("无紧急告警")
 
 
 def generate_email(reservations: List[Dict], cb_instances: Dict[str, List[Dict]] = None) -> tuple:

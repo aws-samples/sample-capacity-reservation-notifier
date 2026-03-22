@@ -115,6 +115,21 @@ class CapacityReservationNotifierStack(Stack):
             )
         )
 
+        # Hourly Alert Check Schedule (every hour on the hour)
+        scheduler.CfnSchedule(
+            self, "HourlyAlertSchedule",
+            name="capacity-reservation-notifier-alert-check",
+            schedule_expression="cron(0 * * * ? *)",
+            flexible_time_window=scheduler.CfnSchedule.FlexibleTimeWindowProperty(
+                mode="OFF"
+            ),
+            target=scheduler.CfnSchedule.TargetProperty(
+                arn=lambda_function.function_arn,
+                role_arn=scheduler_role.role_arn,
+                input='{"mode": "alert_check"}'
+            )
+        )
+
         # ===================================================================
         # API Gateway for Dashboard
         # ===================================================================
